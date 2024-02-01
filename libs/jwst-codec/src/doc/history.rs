@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::Arc,
-};
+use std::{collections::VecDeque, sync::Arc};
 
 use super::{store::StoreRef, *};
 use crate::sync::RwLock;
@@ -65,15 +62,15 @@ impl StoreHistory {
 
         // make items as reference
         let mut store_items = store_items.iter().collect::<Vec<_>>();
-        store_items.sort_by(|a, b| a.id.cmp(&b.id));
+        store_items.sort_by(|a, b| a.id.clock.cmp(&b.id.clock));
 
         self.parse_items(store_items)
     }
 
     pub fn parse_delete_sets(
         &self,
-        old_sets: &HashMap<Client, OrderRange>,
-        new_sets: &HashMap<Client, OrderRange>,
+        old_sets: &ClientMap<OrderRange>,
+        new_sets: &ClientMap<OrderRange>,
     ) -> Vec<History> {
         let store = self.store.read().unwrap();
         let deleted_items = new_sets
@@ -131,7 +128,7 @@ impl StoreHistory {
 
         // make items as reference
         let mut store_items = store_items.iter().collect::<Vec<_>>();
-        store_items.sort_by(|a, b| a.id.cmp(&b.id));
+        store_items.sort_by(|a, b| a.id.clock.cmp(&b.id.clock));
 
         self.parse_items(store_items)
     }
@@ -205,7 +202,7 @@ impl StoreHistory {
 
     fn get_node_name(item: &Item) -> String {
         if let Some(name) = item.parent_sub.clone() {
-            name
+            name.to_string()
         } else {
             let mut curr = item.clone();
             let mut idx = 0;
@@ -260,7 +257,7 @@ impl ToString for HistoryAction {
 #[derive(Debug, PartialEq)]
 pub struct History {
     pub id: String,
-    pub field_name: Option<String>,
+    pub field_name: Option<SmolStr>,
     pub parent: Vec<String>,
     pub content: String,
     pub action: HistoryAction,

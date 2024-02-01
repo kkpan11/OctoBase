@@ -1,4 +1,4 @@
-use std::collections::hash_map::Iter;
+use std::{collections::hash_map::Iter, rc::Rc};
 
 use super::*;
 use crate::{
@@ -11,14 +11,14 @@ impl_type!(Map);
 pub(crate) trait MapType: AsInner<Inner = YTypeRef> {
     fn _insert<V: Into<Value>>(&mut self, key: String, value: V) -> JwstCodecResult {
         if let Some((mut store, mut ty)) = self.as_inner().write() {
-            let left = ty.map.get(&key).cloned();
+            let left = ty.map.get(&SmolStr::new(&key)).cloned();
 
             let item = store.create_item(
                 value.into().into(),
                 left.unwrap_or(Somr::none()),
                 Somr::none(),
                 Some(Parent::Type(self.as_inner().clone())),
-                Some(key),
+                Some(SmolStr::new(key)),
             );
             store.integrate(Node::Item(item), 0, Some(&mut ty))?;
         }
@@ -71,10 +71,10 @@ pub(crate) trait MapType: AsInner<Inner = YTypeRef> {
         let ty = self.as_inner().ty();
 
         if let Some(ty) = ty {
-            let ty = Arc::new(ty);
+            let ty = Rc::new(ty);
 
             EntriesInnerIterator {
-                iter: Some(unsafe { &*Arc::as_ptr(&ty) }.map.iter()),
+                iter: Some(unsafe { &*Rc::as_ptr(&ty) }.map.iter()),
                 _lock: Some(ty),
             }
         } else {
@@ -99,8 +99,8 @@ pub(crate) trait MapType: AsInner<Inner = YTypeRef> {
 }
 
 pub(crate) struct EntriesInnerIterator<'a> {
-    _lock: Option<Arc<RwLockReadGuard<'a, YType>>>,
-    iter: Option<Iter<'a, String, ItemRef>>,
+    _lock: Option<Rc<RwLockReadGuard<'a, YType>>>,
+    iter: Option<Iter<'a, SmolStr, ItemRef>>,
 }
 
 pub struct KeysIterator<'a>(EntriesInnerIterator<'a>);
@@ -108,14 +108,14 @@ pub struct ValuesIterator<'a>(EntriesInnerIterator<'a>);
 pub struct EntriesIterator<'a>(EntriesInnerIterator<'a>);
 
 impl<'a> Iterator for EntriesInnerIterator<'a> {
-    type Item = (&'a String, &'a Item);
+    type Item = (&'a str, &'a Item);
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(iter) = &mut self.iter {
             for (k, v) in iter {
                 if let Some(item) = v.get() {
                     if !item.deleted() {
-                        return Some((k, item));
+                        return Some((k.as_str(), item));
                     }
                 }
             }
@@ -128,7 +128,7 @@ impl<'a> Iterator for EntriesInnerIterator<'a> {
 }
 
 impl<'a> Iterator for KeysIterator<'a> {
-    type Item = &'a String;
+    type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next().map(|(k, _)| k)
@@ -144,7 +144,7 @@ impl<'a> Iterator for ValuesIterator<'a> {
 }
 
 impl<'a> Iterator for EntriesIterator<'a> {
-    type Item = (&'a String, Value);
+    type Item = (&'a str, Value);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next().map(|(k, v)| (k, Value::from(&v.content)))
@@ -247,7 +247,7 @@ mod tests {
             map.insert("2".to_string(), false).unwrap();
 
             let binary = doc.encode_update_v1().unwrap();
-            let new_doc = Doc::new_from_binary(binary).unwrap();
+            let new_doc = Doc::try_from_binary_v1(binary).unwrap();
             let map = new_doc.get_or_create_map("map").unwrap();
             assert_eq!(map.get("1").unwrap(), Value::Any(Any::String("value".to_string())));
             assert_eq!(map.get("2").unwrap(), Value::Any(Any::False));
@@ -279,7 +279,7 @@ mod tests {
             };
 
             {
-                let doc = Doc::new_from_binary(binary).unwrap();
+                let doc = Doc::try_from_binary_v1(binary).unwrap();
                 let map = doc.get_or_create_map("map").unwrap();
                 assert_eq!(map.get("1").unwrap(), Value::Any(Any::String("value1".to_string())));
                 assert_eq!(map.get("2").unwrap(), Value::Any(Any::String("value2".to_string())));
@@ -302,8 +302,8 @@ mod tests {
             assert_eq!(
                 vec,
                 vec![
-                    (&"1".to_string(), Value::Any(Any::String("value1".to_string()))),
-                    (&"2".to_string(), Value::Any(Any::String("value2".to_string())))
+                    ("1", Value::Any(Any::String("value1".to_string()))),
+                    ("2", Value::Any(Any::String("value2".to_string())))
                 ]
             )
         });

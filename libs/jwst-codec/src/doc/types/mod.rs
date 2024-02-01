@@ -5,10 +5,7 @@ mod text;
 mod value;
 mod xml;
 
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    sync::Weak,
-};
+use std::{collections::hash_map::Entry, sync::Weak};
 
 pub use array::*;
 use list::*;
@@ -30,7 +27,7 @@ use crate::{
 pub(crate) struct YType {
     pub start: Somr<Item>,
     pub item: Somr<Item>,
-    pub map: HashMap<String, Somr<Item>>,
+    pub map: HashMap<SmolStr, Somr<Item>>,
     pub len: u64,
     /// The tag name of XMLElement and XMLHook type
     pub name: Option<String>,

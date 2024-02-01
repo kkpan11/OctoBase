@@ -182,7 +182,7 @@ impl DocDBStorage {
         Ok(())
     }
 
-    async fn update<C>(&self, conn: &C, workspace: &str, guid: &str, blob: Vec<u8>) -> JwstStorageResult<()>
+    async fn update<C>(&self, conn: &C, workspace: &str, guid: &str, blob: &[u8]) -> JwstStorageResult<()>
     where
         C: ConnectionTrait,
     {
@@ -200,13 +200,13 @@ impl DocDBStorage {
         }
 
         trace!("insert update: {guid}, {update_size}");
-        Self::insert(conn, workspace, guid, &blob).await?;
+        Self::insert(conn, workspace, guid, blob).await?;
         trace!("end update: {guid}");
 
         trace!("update {}bytes to {}", blob.len(), guid);
         if let Entry::Occupied(remote) = self.remote.write().await.entry(guid.into()) {
             let broadcast = &remote.get();
-            if broadcast.send(encode_update_as_message(blob)?).is_err() {
+            if broadcast.send(encode_update_as_message(blob.into())?).is_err() {
                 // broadcast failures are not fatal errors, only warnings are required
                 warn!("send {guid} update to pipeline failed");
             }
@@ -358,14 +358,14 @@ impl DocStorage<JwstStorageError> for DocDBStorage {
         let _lock = self.bucket.write().await;
 
         trace!("write_update: {:?}", data);
-        self.update(&self.pool, &workspace_id, &guid, data.into()).await?;
+        self.update(&self.pool, &workspace_id, &guid, data).await?;
 
         Ok(())
     }
 
     async fn update_doc_with_guid(&self, workspace_id: String, data: &[u8]) -> JwstStorageResult<()> {
         trace!("write_update: {:?}", data);
-        let mut decoder = RawDecoder::new(data.to_vec());
+        let mut decoder = RawDecoder::new(data);
         let guid = decoder.read_var_string()?;
 
         debug!("write_update: get lock");

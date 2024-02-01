@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use super::{history::StoreHistory, publisher::DocPublisher, store::StoreRef, *};
 use crate::sync::{Arc, RwLock};
 
@@ -16,7 +14,7 @@ pub struct DocStoreStatus {
 /// [DocOptions] used to create a new [Doc]
 ///
 /// ```
-/// use y_octo::DocOptions;
+/// use jwst_codec::DocOptions;
 ///
 /// let doc = DocOptions::new()
 ///     .with_client_id(1)
@@ -35,7 +33,7 @@ pub struct DocOptions {
 
 impl Default for DocOptions {
     fn default() -> Self {
-        if cfg!(test) {
+        if cfg!(any(test, feature = "bench")) {
             Self {
                 client_id: 1,
                 guid: "test".into(),
@@ -96,7 +94,7 @@ impl DocOptions {
 
 impl From<DocOptions> for Any {
     fn from(value: DocOptions) -> Self {
-        Any::Object(HashMap::from([
+        Any::Object(HashMap::from_iter([
             ("gc".into(), value.gc.into()),
             ("guid".into(), value.guid.into()),
         ]))
@@ -209,28 +207,28 @@ impl Doc {
         self.opts.guid.as_str()
     }
 
-    pub fn new_from_binary(binary: Vec<u8>) -> JwstCodecResult<Self> {
-        let mut doc = Doc::default();
-        doc.apply_update_from_binary(binary)?;
-        Ok(doc)
+    // TODO:
+    //   provide a better way instead of `_v1` methods
+    //   when implementing `v2` binary format
+    pub fn try_from_binary_v1<T: AsRef<[u8]>>(binary: T) -> JwstCodecResult<Self> {
+        Self::try_from_binary_v1_with_options(binary, DocOptions::default())
     }
 
-    pub fn new_from_binary_with_options(binary: Vec<u8>, options: DocOptions) -> JwstCodecResult<Self> {
+    pub fn try_from_binary_v1_with_options<T: AsRef<[u8]>>(binary: T, options: DocOptions) -> JwstCodecResult<Self> {
         let mut doc = Doc::with_options(options);
-        doc.apply_update_from_binary(binary)?;
+        doc.apply_update_from_binary_v1(binary)?;
         Ok(doc)
     }
 
-    pub fn apply_update_from_binary(&mut self, update: Vec<u8>) -> JwstCodecResult<Update> {
-        let mut decoder = RawDecoder::new(update);
+    pub fn apply_update_from_binary_v1<T: AsRef<[u8]>>(&mut self, binary: T) -> JwstCodecResult {
+        let mut decoder = RawDecoder::new(binary.as_ref());
         let update = Update::read(&mut decoder)?;
         self.apply_update(update)
     }
 
-    pub fn apply_update(&mut self, mut update: Update) -> JwstCodecResult<Update> {
+    pub fn apply_update(&mut self, mut update: Update) -> JwstCodecResult {
         let mut store = self.store.write().unwrap();
         let mut retry = false;
-        let before_state = store.get_state_vector();
         loop {
             for (mut s, offset) in update.iter(store.get_state_vector()) {
                 if let Node::Item(item) = &mut s {
@@ -289,7 +287,7 @@ impl Doc {
             }
         }
 
-        store.diff_state_vector(&before_state, false)
+        Ok(())
     }
 
     pub fn keys(&self) -> Vec<String> {
@@ -423,15 +421,15 @@ mod tests {
                 (binary, binary_new)
             };
 
-            let mut doc = Doc::new_from_binary(binary.clone()).unwrap();
-            let mut doc_new = Doc::new_from_binary(binary_new.clone()).unwrap();
+            let mut doc = Doc::try_from_binary_v1(binary).unwrap();
+            let mut doc_new = Doc::try_from_binary_v1(binary_new).unwrap();
 
             let diff_update = doc_new.encode_state_as_update_v1(&doc.get_state_vector()).unwrap();
 
             let diff_update_reverse = doc.encode_state_as_update_v1(&doc_new.get_state_vector()).unwrap();
 
-            doc.apply_update_from_binary(diff_update).unwrap();
-            doc_new.apply_update_from_binary(diff_update_reverse).unwrap();
+            doc.apply_update_from_binary_v1(diff_update).unwrap();
+            doc_new.apply_update_from_binary_v1(diff_update_reverse).unwrap();
 
             assert_eq!(doc.encode_update_v1().unwrap(), doc_new.encode_update_v1().unwrap());
         });
@@ -491,7 +489,7 @@ mod tests {
 
         let mut doc = Doc::new();
         let array = doc.get_or_create_array("abc").unwrap();
-        doc.apply_update_from_binary(binary).unwrap();
+        doc.apply_update_from_binary_v1(binary).unwrap();
 
         let list = array.iter().collect::<Vec<_>>();
 
@@ -554,7 +552,7 @@ mod tests {
         loom_model!({
             let mut doc = Doc::default();
 
-            doc.apply_update_from_binary(vec![
+            doc.apply_update_from_binary_v1(vec![
                 1, 1, 1, 1, 40, 0, 1, 0, 11, 115, 117, 98, 95, 109, 97, 112, 95, 107, 101, 121, 1, 119, 13, 115, 117,
                 98, 95, 109, 97, 112, 95, 118, 97, 108, 117, 101, 0,
             ])
@@ -571,7 +569,7 @@ mod tests {
                 .iter()
                 .map(|s| s.1.len())
                 .sum::<usize>();
-            doc.apply_update_from_binary(vec![
+            doc.apply_update_from_binary_v1(vec![
                 1, 1, 1, 1, 40, 0, 1, 0, 11, 115, 117, 98, 95, 109, 97, 112, 95, 107, 101, 121, 1, 119, 13, 115, 117,
                 98, 95, 109, 97, 112, 95, 118, 97, 108, 117, 101, 0,
             ])
@@ -592,5 +590,39 @@ mod tests {
                     .sum::<usize>()
             );
         });
+    }
+
+    #[test]
+    fn test_update_from_vec_ref() {
+        loom_model!({
+            let doc = Doc::new();
+
+            let mut text = doc.get_or_create_text("text").unwrap();
+            text.insert(0, "hello world").unwrap();
+
+            let update = doc.encode_update_v1().unwrap();
+
+            let doc = Doc::try_from_binary_v1(update).unwrap();
+            let text = doc.get_or_create_text("text").unwrap();
+
+            assert_eq!(&text.to_string(), "hello world");
+        });
+    }
+
+    #[test]
+    #[cfg_attr(any(miri, loom), ignore)]
+    fn test_apply_update() {
+        let updates = [
+            include_bytes!("../fixtures/basic.bin").to_vec(),
+            include_bytes!("../fixtures/database.bin").to_vec(),
+            include_bytes!("../fixtures/large.bin").to_vec(),
+            include_bytes!("../fixtures/with-subdoc.bin").to_vec(),
+            include_bytes!("../fixtures/edge-case-left-right-same-node.bin").to_vec(),
+        ];
+
+        for update in updates {
+            let mut doc = Doc::new();
+            doc.apply_update_from_binary_v1(&update).unwrap();
+        }
     }
 }
